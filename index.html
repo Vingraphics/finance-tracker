@@ -53,6 +53,8 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 .entry-right{display:flex;align-items:center;gap:2px;flex-shrink:0}
 .entry-amt{font-size:13px;font-weight:600;font-family:'DM Mono',monospace}
 .del-btn{background:none;border:none;color:var(--text3);font-size:17px;cursor:pointer;padding:4px 6px;line-height:1}
+.edit-btn{background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:4px 6px;line-height:1}
+.edit-btn:hover{color:var(--navy)}
 .empty{text-align:center;padding:36px 20px;color:var(--text3);font-size:13px;line-height:1.8}
 
 .bar-wrap{margin-bottom:11px}
@@ -161,7 +163,7 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 <div id="screen-add">
   <div class="add-header">
     <button class="back-btn" onclick="closeAdd()">&#8592;</button>
-    <div class="add-title">New Entry</div>
+    <div class="add-title" id="add-title">New Entry</div>
   </div>
   <div class="add-body">
     <div class="type-grid">
@@ -212,12 +214,12 @@ html,body{height:100%;font-family:'DM Sans',sans-serif;background:var(--bg);colo
 </div>
 
 <script>
-const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbxB7_aM5RwJoNWvS351PvDzNcEaEHfC2zAC_DS93m1WR2XcxvL9wEnBBkrMQNwv7RpDOg/exec';
+const SCRIPT_URL = 'https://script.google.com/macros/s/AKfycbz-4Nm2zj5h8ZONQO4epD6V_RC-ijApTdFOk3QMA-hEckLFaif3eG5NjWYIdUmeEu5bUA/exec';
 const MONTHS = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
 const ICONS = {Meals:'🍽️',Bills:'🧾',Travel:'✈️',Car:'⛽',Grooming:'💈',Household:'🏠',Entertainment:'🎭',Clothing:'👔',Medical:'💊',Misc:'🎲',Business:'📦',Income:'💰',Savings:'💾'};
 const CAT_COLORS = {Income:'#1B6B3A',Savings:'#9A7010',Business:'#1A2E4A'};
 
-let entries = [], selectedType = 'expense';
+let entries = [], selectedType = 'expense', editingId = null;
 
 const $ = id => document.getElementById(id);
 function today(){ return new Date().toISOString().split('T')[0]; }
@@ -281,6 +283,7 @@ function entryHTML(e, showDate = false){
     </div>
     <div class="entry-right">
       <div class="entry-amt ${amtCls}">${sign}${fmt(e.amt)}</div>
+      <button class="edit-btn" onclick="editEntry('${e.id}')" title="Edit">✏️</button>
       <button class="del-btn" onclick="delEntry('${e.id}')">×</button>
     </div>
   </div>`;
@@ -364,12 +367,29 @@ function showTab(tab){
 }
 
 function showAdd(){
+  editingId = null;
+  $('add-title').textContent = 'New Entry';
   $('screen-add').classList.add('open');
   $('entry-date').value = today();
   $('amt').value = ''; $('desc').value = ''; $('notes').value = '';
   $('save-btn').textContent = 'Save Entry'; $('save-btn').disabled = false;
   selType('expense');
   setTimeout(() => $('amt').focus(), 100);
+}
+
+function editEntry(id){
+  const e = entries.find(e => String(e.id) === String(id));
+  if(!e) return;
+  editingId = id;
+  $('add-title').textContent = 'Edit Entry';
+  $('screen-add').classList.add('open');
+  $('entry-date').value = e.date;
+  $('amt').value = e.amt;
+  $('desc').value = e.desc || '';
+  $('notes').value = e.notes || '';
+  $('cat').value = e.cat;
+  $('save-btn').textContent = 'Update Entry'; $('save-btn').disabled = false;
+  selType(e.type || 'expense');
 }
 
 function closeAdd(){ $('screen-add').classList.remove('open'); }
@@ -395,27 +415,42 @@ async function saveEntry(){
   if(!amt || amt <= 0){ alert('Enter a valid amount'); return; }
   if(!date){ alert('Pick a date'); return; }
   const d = new Date(date);
-  const entry = {
-    id: String(Date.now()), date, cat, desc,
-    type: selectedType, amt,
-    month: MONTHS[d.getMonth()],
-    year: String(d.getFullYear()),
-    notes
-  };
   const btn = $('save-btn');
   btn.disabled = true;
   btn.innerHTML = '<span class="spinner"></span>Saving...';
-  entries.push(entry);
-  saveLocal();
-  closeAdd();
-  updateStats();
-  renderToday();
-  try {
-    setSyncStatus('busy', 'syncing...');
-    await postToSheet({ action: 'append', row: [entry.id, entry.date, entry.cat, entry.desc, entry.type, entry.amt, entry.month, entry.year, entry.notes] });
-    setSyncStatus('ok', 'synced');
-  } catch(e) {
-    setSyncStatus('err', 'saved locally');
+
+  if(editingId) {
+    // EDIT MODE — update existing entry
+    const idx = entries.findIndex(e => String(e.id) === String(editingId));
+    if(idx > -1){
+      entries[idx] = { ...entries[idx], date, cat, desc, type: selectedType, amt,
+        month: MONTHS[d.getMonth()], year: String(d.getFullYear()), notes };
+      saveLocal();
+      closeAdd(); updateStats(); renderToday(); renderHistory();
+      try {
+        setSyncStatus('busy', 'syncing...');
+        await postToSheet({ action: 'update', id: editingId,
+          row: [editingId, date, cat, desc, selectedType, amt, MONTHS[d.getMonth()], String(d.getFullYear()), notes] });
+        setSyncStatus('ok', 'synced');
+      } catch(e){ setSyncStatus('err', 'sync error'); }
+    }
+  } else {
+    // ADD MODE — new entry
+    const entry = {
+      id: String(Date.now()), date, cat, desc,
+      type: selectedType, amt,
+      month: MONTHS[d.getMonth()],
+      year: String(d.getFullYear()),
+      notes
+    };
+    entries.push(entry);
+    saveLocal();
+    closeAdd(); updateStats(); renderToday();
+    try {
+      setSyncStatus('busy', 'syncing...');
+      await postToSheet({ action: 'append', row: [entry.id, entry.date, entry.cat, entry.desc, entry.type, entry.amt, entry.month, entry.year, entry.notes] });
+      setSyncStatus('ok', 'synced');
+    } catch(e){ setSyncStatus('err', 'saved locally'); }
   }
 }
 
